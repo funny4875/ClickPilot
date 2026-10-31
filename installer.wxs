@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="ClickPilot" Language="1028" Version="1.0.0" Manufacturer="ClickPilot" UpgradeCode="F129323D-D43C-4819-8536-A9F46DDCA7F9">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon" SourceFile="assets\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder"><Directory Id="INSTALLFOLDER" Name="ClickPilot">
+        <Component Id="AppFiles" Guid="A538D7C6-3D81-4608-A932-1AD57C662961"><File Id="AppExe" Source="dist\ClickPilot.exe" /><RemoveFolder Id="RemoveInstallFolder" On="uninstall" /><RegistryValue Root="HKCU" Key="Software\ClickPilot" Name="AppInstalled" Type="integer" Value="1" KeyPath="yes" /></Component>
+      </Directory></Directory>
+      <Directory Id="ProgramMenuFolder"><Directory Id="AppMenuFolder" Name="ClickPilot">
+        <Component Id="StartMenu" Guid="178835A3-7F41-4E62-B46A-99D4D62C1208">
+          <Shortcut Id="StartMenuShortcut" Name="ClickPilot" Target="[INSTALLFOLDER]ClickPilot.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />
+          <RemoveFolder Id="RemoveAppMenu" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\ClickPilot" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory></Directory>
+    </Directory>
+    <Feature Id="MainFeature" Title="ClickPilot" Level="1"><ComponentRef Id="AppFiles"/><ComponentRef Id="StartMenu"/></Feature>
+  </Product>
+</Wix>
+
