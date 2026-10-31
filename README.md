@@ -6,7 +6,7 @@ ClickPilot 是 Windows 上的 Chrome 操作錄製與重播工具。將網頁操�
 
 ## 下載與安裝
 
-從 [最新 Release](https://github.com/funny4875/ClickPilot/releases/latest) 下載 `ClickPilot-1.0.0.msi`，執行安裝程式，再從開始功能表開啟 ClickPilot。需要 Windows 及已安裝的 Google Chrome；首次啟動瀏覽器時 Selenium 可能需要網路下載相容的 ChromeDriver。
+從 [最新 Release](https://github.com/funny4875/ClickPilot/releases/latest) 下載 最新的 `ClickPilot` MSI 安裝檔，執行安裝程式，再從桌面或開始功能表開啟 ClickPilot。需要 Windows 及已安裝的 Google Chrome；首次啟動瀏覽器時 Selenium 可能需要網路下載相容的 ChromeDriver。
 
 ## 使用方式
 
