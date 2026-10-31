@@ -22,9 +22,19 @@ ClickPilot 是 Windows 上的 Chrome 操作錄製與重播工具。將網頁操�
 {"name":"輸入 PIN","action":"send_keys","xpath":"/html[1]/body[1]/input[1]","value":"${PIN}","timeout":5}
 ```
 
-支援 `click`、`clear`、`send_keys` 與 `key`（例如 `ENTER`）。`timeout` 是等待元件出現的最長秒數；每 0.2 秒重新查找，找到後立即執行，逾時會停止並顯示步驟與 XPath。`${PIN}` 等變數在執行前要求輸入，密碼欄位錄製為 `${PIN}`。
+支援 `click`、`clear`、`send_keys`、`paste`、`key`、`wait` 與 `wait_for`。`key` 支援 `ENTER`、`TAB`、`ESCAPE`；空行與 `#` 開頭的註解會略過。
 
-XPath 依賴網頁結構，網頁改版後可能需要調整。跨頁跳轉瞬間、iframe、特殊元件及瀏覽器原生對話框可能無法記錄，請檢查腳本；輸入欄位在變更完成、失焦時記錄。
+```json
+{"name":"等待清單","action":"wait_for","xpath":"//*[@id='list']","timeout":30}
+{"name":"等待動畫","action":"wait","seconds":3}
+{"name":"貼上文字","action":"paste","xpath":"//*[@id='field']","value":"文字"}
+```
+
+每個 XPath 步驟都會等待目標可見且啟用，並在元素變動或點擊被遮擋時重新嘗試，直到可操作或超過 `timeout` 秒（預設 5 秒）。`wait_for` 只等待元件，`wait` 則固定等待秒數。按「停止執行」可中斷等待；逾時會顯示執行次數、行號、步驟與 XPath。
+
+錄製時，文字欄位會記錄為 `clear` 與 `send_keys`，按 Enter 前或暫停、結束錄製時也會儲存尚未失焦的輸入。Ctrl+V 會記錄為 `paste`，回放時暫存並嘗試還原剪貼簿；若剪貼簿含無法安全備份的圖片或特殊格式，會停止並提示。`${PIN}` 等變數在執行前要求輸入，密碼欄位錄製為 `${PIN}`。非密碼類型的敏感欄位可能記錄明文，請在儲存前檢查。
+
+XPath 依賴網頁結構，網頁改版後可能需要調整。錄製使用 Chrome 日誌以保留跨頁操作，切換分頁、iframe、彈出視窗、網站內建對話框及快速跳頁仍可能無法完整記錄，請檢查腳本。錄製與剪貼簿處理參考 [DocPilot](https://github.com/funny4875/DocPilot)。
 
 ## 從原始碼執行
 

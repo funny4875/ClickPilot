@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="ClickPilot" Language="1028" Version="1.0.2" Manufacturer="ClickPilot" UpgradeCode="F129323D-D43C-4819-8536-A9F46DDCA7F9">
+  <Product Id="*" Name="ClickPilot" Language="1028" Version="1.0.3" Manufacturer="ClickPilot" UpgradeCode="F129323D-D43C-4819-8536-A9F46DDCA7F9">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" />
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
     <MediaTemplate EmbedCab="yes" />

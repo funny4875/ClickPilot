@@ -2,21 +2,14 @@ import json, os, queue, re, sys, threading, time, traceback, tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeDriver
+from selenium.webdriver.chrome.options import Options
+import script_engine
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support import expected_conditions as EC
 
-JS = r'''if (!window.__recorder) {
- window.__recorder={events:[],active:true};
- const xp=e=>{let p=[]; while(e&&e.nodeType===1){let i=1,s=e; while(s=s.previousElementSibling) if(s.tagName===e.tagName)i++; p.unshift(e.tagName.toLowerCase()+'['+i+']'); e=e.parentElement} return '/'+p.join('/')};
- const name=e=>(e.innerText||e.getAttribute('aria-label')||e.placeholder||e.name||e.id||e.tagName).trim().slice(0,40);
- const add=(e,a,v)=>{if(!window.__recorder.active||!e.isTrusted)return; let x={name:name(e.target),action:a,xpath:xp(e.target),timeout:5}; if(v!==undefined)x.value=v; window.__recorder.events.push(x)};
- document.addEventListener('click',e=>add(e,'click'),true);
- document.addEventListener('change',e=>{if(e.target.matches('input,textarea')){add(e,'clear');add(e,'send_keys',e.target.type==='password'?'${PIN}':e.target.value)}},true);
- document.addEventListener('keydown',e=>{if(['Enter','Tab','Escape'].includes(e.key))add(e,'key',e.key.toUpperCase())},true);
-} window.__recorder.active=arguments[0]; return window.__recorder.events.splice(0);'''
 
 class App:
  def __init__(self, root):
@@ -44,21 +37,28 @@ class App:
   def work():
    try:
     if self.driver: self.driver.quit()
-    self.driver=ChromeDriver(); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
+    options=Options(); options.set_capability('goog:loggingPrefs', {'browser': 'ALL'}); self.driver=ChromeDriver(options=options); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
    except Exception as e: self.driver=None; self.q.put(('error',str(e)))
   self.worker(work)
  def start(self):
   self.state='recording'; self.refresh(); self.status.config(text='錄製中'); self.worker(self.record)
  def record(self):
+  identifier=None
   try:
+   identifier=script_engine.start_recording(self.driver)
    while self.state=='recording':
-    events=self.driver.execute_script(JS,True)
+    events=script_engine.read_recording(self.driver)
     if events:self.q.put(('events',events))
     time.sleep(.2)
-   events=self.driver.execute_script(JS,False)
+   script_engine.stop_recording(self.driver,identifier); identifier=None
+   events=script_engine.read_recording(self.driver)
    if events:self.q.put(('events',events))
   except Exception as e:self.q.put(('error',str(e)))
-  finally:self.q.put(('record_done',))
+  finally:
+   if identifier is not None:
+    try:script_engine.stop_recording(self.driver,identifier)
+    except Exception:pass
+   self.q.put(('record_done',))
  def pause(self): self.state='pausing'; self.refresh(); self.status.config(text='正在暫停')
  def finish(self):
   if self.state=='recording': self.state='finishing'; self.status.config(text='正在結束錄製')
@@ -75,35 +75,25 @@ class App:
    self.editor.delete('1.0','end'); self.editor.insert('1.0',data)
  def run(self):
   try:
-   count=int(self.count.get()); assert count>0
-   steps=[json.loads(line) for line in self.editor.get('1.0','end-1c').splitlines() if line.strip()]; assert steps
-   for s in steps:
-    assert s['action'] in ('click','clear','send_keys','key') and s['xpath'] and float(s.get('timeout',5))>0
-  except Exception as e: messagebox.showerror('腳本錯誤',f'請檢查執行次數及每行 JSON 格式：{e}'); return
-  names=set(re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}',json.dumps(steps,ensure_ascii=False))); values={}
-  for name in names:
+   count=int(self.count.get())
+   if count<=0: raise ValueError('執行次數必須大於 0')
+   steps=script_engine.parse_script(self.editor.get('1.0','end-1c'))
+  except (ValueError, TypeError) as e:
+   messagebox.showerror('腳本錯誤',str(e)); return
+  names=set(re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}',json.dumps([s for _,s in steps],ensure_ascii=False))); values={}
+  for name in sorted(names):
    v=simpledialog.askstring('變數',f'請輸入 {name} 的值',show='*',parent=self.root)
    if v is None:return
    values[name]=v
   self.stop_event.clear(); self.state='running'; self.refresh()
   def work():
    try:
-    for i in range(count):
-     for j,s in enumerate(steps):
-      if self.stop_event.is_set(): self.q.put(('state','idle','已停止執行')); return
-      self.q.put(('status',f'第 {i+1}/{count} 次，第 {j+1}/{len(steps)} 步：{s.get("name","")}'))
-      try:
-       el=WebDriverWait(self.driver,float(s.get('timeout',5)),poll_frequency=.2).until(EC.presence_of_element_located((By.XPATH,s['xpath'])))
-      except TimeoutException:
-       raise RuntimeError(f'第 {i+1} 次、第 {j+1} 步「{s.get("name", "")}」等待元件超過 {s.get("timeout", 5)} 秒：{s["xpath"]}') from None
-      action=s['action']; value=str(s.get('value',''))
-      for n,v in values.items():value=value.replace('${'+n+'}',v)
-      if action=='click':el.click()
-      elif action=='clear':el.clear()
-      elif action=='send_keys':el.send_keys(value)
-      else:el.send_keys(getattr(Keys,value.upper()))
+    def progress(cycle,line,step):
+     self.q.put(('status',f'第 {cycle}/{count} 次，第 {line} 行：{step.get("name") or step["action"]}'))
+    script_engine.run_script(self.driver,steps,count,values,self.stop_event,progress)
     self.q.put(('state','idle','執行完成'))
-   except Exception as e:self.q.put(('error',f'執行失敗：{e}'))
+   except script_engine.Stopped:self.q.put(('state','idle','已停止執行'))
+   except Exception as e:self.q.put(('error',str(e)))
   self.worker(work)
  def poll(self):
   try:
