@@ -1,6 +1,7 @@
-import json, os, queue, re, threading, time, tkinter as tk
+import json, os, queue, re, sys, threading, time, traceback, tkinter as tk
+from pathlib import Path
 from tkinter import ttk, filedialog, messagebox, simpledialog
-from selenium import webdriver
+from selenium.webdriver.chrome.webdriver import WebDriver as ChromeDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -19,7 +20,7 @@ JS = r'''if (!window.__recorder) {
 
 class App:
  def __init__(self, root):
-  self.root=root; root.title('Chrome 操作錄製器'); root.geometry('1100x700'); self.driver=None; self.state='idle'; self.q=queue.Queue(); self.stop_event=threading.Event()
+  self.root=root; root.title('ClickPilot - Chrome 操作錄製器'); root.iconbitmap(str(Path(__file__).resolve().parent / 'assets' / 'icon.ico')); root.geometry('1100x700'); self.driver=None; self.state='idle'; self.q=queue.Queue(); self.stop_event=threading.Event()
   top=ttk.Frame(root,padding=8); top.pack(fill='x'); ttk.Label(top,text='網址').pack(side='left'); self.url=ttk.Entry(top); self.url.insert(0,'https://example.com'); self.url.pack(side='left',fill='x',expand=True,padx=6)
   self.buttons={}
   for text,cmd in [('開啟 Chrome',self.open_browser),('開始錄製',self.start),('暫停錄製',self.pause),('結束錄製',self.finish),('開啟腳本',self.load),('存檔',self.save)]:
@@ -43,7 +44,7 @@ class App:
   def work():
    try:
     if self.driver: self.driver.quit()
-    self.driver=webdriver.Chrome(); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
+    self.driver=ChromeDriver(); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
    except Exception as e: self.driver=None; self.q.put(('error',str(e)))
   self.worker(work)
  def start(self):
@@ -128,5 +129,16 @@ class App:
    except Exception:pass
   self.root.destroy()
 
-if __name__=='__main__': App(tk.Tk()).root.mainloop()
+if __name__=='__main__':
+ if len(sys.argv)==3 and sys.argv[1]=='--diagnose-chrome':
+  result=Path(sys.argv[2])
+  try:
+   driver=ChromeDriver()
+   try:
+    driver.get('data:text/html,<title>ClickPilot test</title>')
+    result.write_text('OK: '+driver.title,encoding='utf-8')
+   finally: driver.quit()
+  except Exception:
+   result.write_text(traceback.format_exc(),encoding='utf-8')
+ else: App(tk.Tk()).root.mainloop()
 
