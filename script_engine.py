@@ -140,10 +140,10 @@ def parse_script(content):
             continue
         try:
             step = json.loads(line)
-            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for'):
+            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'video_start', 'video_pause', 'video_stop'):
                 raise ValueError('需指定有效的 action')
             action = step['action']
-            if action != 'wait' and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
+            if action not in ('wait', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
                 raise ValueError('需指定有效的 xpath')
             if 'name' in step and not isinstance(step['name'], str):
                 raise ValueError('name 必須是文字')
@@ -173,6 +173,22 @@ class Stopped(Exception):
 
 
 def run_script(driver, steps, count, variables, stop, progress):
+    from video_recorder import TabVideoRecorder
+    recorder = TabVideoRecorder(driver, stop)
+    try:
+        _run_script(driver, steps, count, variables, stop, progress, recorder)
+        if recorder.state != 'idle':
+            raise RuntimeError('腳本結束時分頁錄影尚未結束，請加入結束錄影指令。')
+        return recorder.output
+    finally:
+        if recorder.state != 'idle':
+            try:
+                recorder.finish()
+            except Exception:
+                recorder.cleanup()
+
+
+def _run_script(driver, steps, count, variables, stop, progress, recorder):
     for cycle in range(1, count + 1):
         for line, step in steps:
             if stop.is_set():
@@ -180,6 +196,16 @@ def run_script(driver, steps, count, variables, stop, progress):
             action = step['action']
             progress(cycle, line, step)
             try:
+                if action == 'video_start':
+                    recorder.start()
+                    continue
+                if action == 'video_pause':
+                    recorder.pause()
+                    continue
+                if action == 'video_stop':
+                    output = recorder.finish()
+                    progress(cycle, line, {'name': f'影片已儲存：{output}'})
+                    continue
                 if action == 'wait':
                     if stop.wait(step['seconds']):
                         raise Stopped()

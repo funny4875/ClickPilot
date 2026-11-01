@@ -19,7 +19,15 @@ class App:
   for text,cmd in [('開啟 Chrome',self.open_browser),('開始錄製',self.start),('暫停錄製',self.pause),('結束錄製',self.finish),('開啟腳本',self.load),('存檔',self.save)]:
    b=ttk.Button(top,text=text,command=cmd); b.pack(side='left',padx=2); self.buttons[text]=b
   bar=ttk.Frame(root,padding=(8,0)); bar.pack(fill='x'); self.runbtn=ttk.Button(bar,text='執行腳本',command=self.run); self.runbtn.pack(side='left'); self.count=ttk.Entry(bar,width=5); self.count.insert(0,'1'); self.count.pack(side='left',padx=5); ttk.Label(bar,text='次').pack(side='left'); self.stopbtn=ttk.Button(bar,text='停止執行',command=self.stop_event.set); self.stopbtn.pack(side='left',padx=10); self.status=ttk.Label(bar,text='準備就緒'); self.status.pack(side='left',padx=10)
+  video_bar=ttk.Frame(root,padding=(8,4)); video_bar.pack(fill='x')
+  ttk.Label(video_bar,text='插入分頁錄影指令：').pack(side='left')
+  for label,action in [('開始錄影','video_start'),('暫停錄影','video_pause'),('結束錄影','video_stop')]:
+   ttk.Button(video_bar,text=label,command=lambda a=action,n=label:self.insert_video_step(a,n)).pack(side='left',padx=2)
   frame=ttk.Frame(root,padding=8); frame.pack(fill='both',expand=True); self.lines=tk.Text(frame,width=5,state='disabled',takefocus=0,bg='#eeeeee',wrap='none'); self.lines.grid(row=0,column=0,sticky='ns'); self.editor=tk.Text(frame,wrap='none',undo=True); self.editor.grid(row=0,column=1,sticky='nsew'); y=ttk.Scrollbar(frame,orient='vertical',command=self.scroll); self.ybar=y; y.grid(row=0,column=2,sticky='ns'); x=ttk.Scrollbar(frame,orient='horizontal',command=self.editor.xview); x.grid(row=1,column=1,sticky='ew'); self.editor.configure(yscrollcommand=self.yscroll,xscrollcommand=x.set); frame.rowconfigure(0,weight=1); frame.columnconfigure(1,weight=1); self.editor.bind('<<Modified>>',self.modified); self.refresh(); root.after(150,self.poll); root.protocol('WM_DELETE_WINDOW',self.close)
+ def insert_video_step(self,action,name):
+  position=self.editor.index('insert linestart')
+  step=json.dumps({'name':name,'action':action},ensure_ascii=False)+'\n'
+  self.editor.insert(position,step); self.editor.mark_set('insert',f'{position} + {len(step)} chars'); self.editor.focus_set()
  def scroll(self,*args): self.editor.yview(*args); self.lines.yview(*args)
  def yscroll(self,*args): self.ybar.set(*args); self.lines.yview_moveto(args[0])
  def modified(self,event=None):
@@ -90,8 +98,8 @@ class App:
    try:
     def progress(cycle,line,step):
      self.q.put(('status',f'第 {cycle}/{count} 次，第 {line} 行：{step.get("name") or step["action"]}'))
-    script_engine.run_script(self.driver,steps,count,values,self.stop_event,progress)
-    self.q.put(('state','idle','執行完成'))
+    output=script_engine.run_script(self.driver,steps,count,values,self.stop_event,progress)
+    self.q.put(('state','idle',f'影片已儲存：{output}' if output else '執行完成'))
    except script_engine.Stopped:self.q.put(('state','idle','已停止執行'))
    except Exception as e:self.q.put(('error',str(e)))
   self.worker(work)

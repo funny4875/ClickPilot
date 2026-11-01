@@ -45,3 +45,19 @@ py -m pip install -r requirements.txt
 py app.py
 ```
 
+
+## 錄製分頁影片和聲音
+
+在腳本游標所在行，使用「開始錄影」、「暫停錄影」、「結束錄影」按鈕插入指令。執行腳本時，「開始錄影」會要求在目前網頁上拖曳選取區域，再於 Chrome 分享視窗選擇**同一個分頁**並勾選「分享分頁音訊」。若沒有選擇分頁或沒有分享音訊，程式會提示錯誤。錄影範圍相對於網頁可視區域；錄影期間請維持視窗尺寸與縮放比例。
+
+「暫停錄影」後再次執行「開始錄影」會繼續同一段影片；「結束錄影」會用 FFmpeg 編碼 MP4，儲存在使用者的 `Videos/ClickPilot` 資料夾。每次完成錄影都會建立不同檔案。影片包含所選區域的畫面及整個分頁的聲音，不包含瀏覽器工具列。首次安裝相依套件時會一併安裝 FFmpeg 執行檔。
+
+```json
+{"name":"開始錄影","action":"video_start"}
+{"action":"wait","seconds":10}
+{"name":"暫停錄影","action":"video_pause"}
+{"action":"wait","seconds":2}
+{"name":"繼續錄影","action":"video_start"}
+{"action":"wait","seconds":5}
+{"name":"結束錄影","action":"video_stop"}
+```
