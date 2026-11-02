@@ -1,9 +1,10 @@
-import json, os, queue, re, sys, threading, time, traceback, tkinter as tk
+import json, math, os, queue, re, secrets, sys, threading, time, traceback, tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeDriver
 from selenium.webdriver.chrome.options import Options
 import script_engine
+import video_recorder
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -13,20 +14,55 @@ from selenium.webdriver.support import expected_conditions as EC
 
 class App:
  def __init__(self, root):
-  self.root=root; root.title('ClickPilot - Chrome 操作錄製器'); root.iconbitmap(str(Path(__file__).resolve().parent / 'assets' / 'icon.ico')); root.geometry('1100x700'); self.driver=None; self.state='idle'; self.q=queue.Queue(); self.stop_event=threading.Event()
+  self.root=root; root.title('ClickPilot - Chrome 操作錄製器'); root.iconbitmap(str(Path(__file__).resolve().parent / 'assets' / 'icon.ico')); root.geometry('1100x700'); self.driver=None; self.drivers=[]; self.state='idle'; self.q=queue.Queue(); self.stop_event=threading.Event()
   top=ttk.Frame(root,padding=8); top.pack(fill='x'); ttk.Label(top,text='網址').pack(side='left'); self.url=ttk.Entry(top); self.url.insert(0,'https://example.com'); self.url.pack(side='left',fill='x',expand=True,padx=6)
   self.buttons={}
   for text,cmd in [('開啟 Chrome',self.open_browser),('開始錄製',self.start),('暫停錄製',self.pause),('結束錄製',self.finish),('開啟腳本',self.load),('存檔',self.save)]:
    b=ttk.Button(top,text=text,command=cmd); b.pack(side='left',padx=2); self.buttons[text]=b
   bar=ttk.Frame(root,padding=(8,0)); bar.pack(fill='x'); self.runbtn=ttk.Button(bar,text='執行腳本',command=self.run); self.runbtn.pack(side='left'); self.count=ttk.Entry(bar,width=5); self.count.insert(0,'1'); self.count.pack(side='left',padx=5); ttk.Label(bar,text='次').pack(side='left'); self.stopbtn=ttk.Button(bar,text='停止執行',command=self.stop_event.set); self.stopbtn.pack(side='left',padx=10); self.status=ttk.Label(bar,text='準備就緒'); self.status.pack(side='left',padx=10)
   video_bar=ttk.Frame(root,padding=(8,4)); video_bar.pack(fill='x')
-  ttk.Label(video_bar,text='插入分頁錄影指令：').pack(side='left')
+  ttk.Label(video_bar,text='插入指令：').pack(side='left')
+  ttk.Button(video_bar,text='等待秒數',command=self.insert_wait_step).pack(side='left',padx=2)
+  ttk.Button(video_bar,text='開啟網址',command=self.insert_url_step).pack(side='left',padx=2)
+  self.reuse_region=tk.BooleanVar(value=False)
+  ttk.Checkbutton(video_bar,text='沿用上次錄影範圍',variable=self.reuse_region).pack(side='left',padx=5)
   for label,action in [('開始錄影','video_start'),('暫停錄影','video_pause'),('結束錄影','video_stop')]:
    ttk.Button(video_bar,text=label,command=lambda a=action,n=label:self.insert_video_step(a,n)).pack(side='left',padx=2)
+  region_bar=ttk.Frame(root,padding=(8,0)); region_bar.pack(fill='x')
+  ttk.Label(region_bar,text='錄影範圍（網頁 CSS 像素）：').pack(side='left')
+  self.region_fields={}
+  saved_region=video_recorder.load_region() or {}
+  for key in ('x','y','w','h'):
+   ttk.Label(region_bar,text=key.upper()).pack(side='left',padx=(5,1))
+   field=ttk.Entry(region_bar,width=7); field.pack(side='left'); self.region_fields[key]=field
+   if key in saved_region: field.insert(0,str(saved_region[key]))
   frame=ttk.Frame(root,padding=8); frame.pack(fill='both',expand=True); self.lines=tk.Text(frame,width=5,state='disabled',takefocus=0,bg='#eeeeee',wrap='none'); self.lines.grid(row=0,column=0,sticky='ns'); self.editor=tk.Text(frame,wrap='none',undo=True); self.editor.grid(row=0,column=1,sticky='nsew'); y=ttk.Scrollbar(frame,orient='vertical',command=self.scroll); self.ybar=y; y.grid(row=0,column=2,sticky='ns'); x=ttk.Scrollbar(frame,orient='horizontal',command=self.editor.xview); x.grid(row=1,column=1,sticky='ew'); self.editor.configure(yscrollcommand=self.yscroll,xscrollcommand=x.set); frame.rowconfigure(0,weight=1); frame.columnconfigure(1,weight=1); self.editor.bind('<<Modified>>',self.modified); self.refresh(); root.after(150,self.poll); root.protocol('WM_DELETE_WINDOW',self.close)
  def insert_video_step(self,action,name):
+  data={'name':name,'action':action}
+  if action=='video_start' and self.reuse_region.get():
+   try:
+    raw={k:v.get().strip() for k,v in self.region_fields.items()}
+    if not any(raw.values()): data['reuse_region']=True
+    else:
+     region=video_recorder.validate_region({k:float(v) for k,v in raw.items()})
+     region={k:int(v) if v.is_integer() else v for k,v in region.items()}
+     data.update(region); video_recorder.save_region(region)
+   except (ValueError,OSError) as e: messagebox.showerror('錄影範圍錯誤',str(e),parent=self.root); return
+  self.insert_step(data)
+ def insert_wait_step(self):
+  seconds=simpledialog.askfloat('等待秒數','請輸入等待秒數（可使用小數）：',minvalue=0,parent=self.root)
+  if seconds is None:return
+  if not math.isfinite(seconds): messagebox.showerror('輸入錯誤','秒數必須是有限數字。',parent=self.root); return
+  self.insert_step({'name':f'等待 {seconds:g} 秒','action':'wait','seconds':seconds})
+ def insert_url_step(self):
+  url=simpledialog.askstring('開啟網址','請輸入完整網址（http:// 或 https://）：',parent=self.root)
+  if url is None:return
+  url=url.strip()
+  if not script_engine.valid_url(url): messagebox.showerror('網址錯誤','請輸入完整的 http:// 或 https:// 網址。',parent=self.root); return
+  self.insert_step({'name':'開啟網址','action':'navigate','url':url})
+ def insert_step(self,data):
   position=self.editor.index('insert linestart')
-  step=json.dumps({'name':name,'action':action},ensure_ascii=False)+'\n'
+  step=json.dumps(data,ensure_ascii=False)+'\n'
   self.editor.insert(position,step); self.editor.mark_set('insert',f'{position} + {len(step)} chars'); self.editor.focus_set()
  def scroll(self,*args): self.editor.yview(*args); self.lines.yview(*args)
  def yscroll(self,*args): self.ybar.set(*args); self.lines.yview_moveto(args[0])
@@ -45,7 +81,7 @@ class App:
   def work():
    try:
     if self.driver: self.driver.quit()
-    options=Options(); options.set_capability('goog:loggingPrefs', {'browser': 'ALL'}); self.driver=ChromeDriver(options=options); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
+    self.driver=script_engine.create_browser(); self.drivers.append(self.driver); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
    except Exception as e: self.driver=None; self.q.put(('error',str(e)))
   self.worker(work)
  def start(self):
@@ -98,7 +134,10 @@ class App:
    try:
     def progress(cycle,line,step):
      self.q.put(('status',f'第 {cycle}/{count} 次，第 {line} 行：{step.get("name") or step["action"]}'))
-    output=script_engine.run_script(self.driver,steps,count,values,self.stop_event,progress)
+    def use_driver(driver):
+     if self.state=='closing': raise RuntimeError('程式正在關閉。')
+     self.drivers.append(driver); self.driver=driver
+    output=script_engine.run_script(self.driver,steps,count,values,self.stop_event,progress,use_driver,lambda region:self.q.put(('region',region)))
     self.q.put(('state','idle',f'影片已儲存：{output}' if output else '執行完成'))
    except script_engine.Stopped:self.q.put(('state','idle','已停止執行'))
    except Exception as e:self.q.put(('error',str(e)))
@@ -115,6 +154,8 @@ class App:
      if self.state=='pausing': self.state='paused'; self.status.config(text='已暫停')
      elif self.state=='finishing': self.state='idle'; self.status.config(text='錄製完成')
      self.refresh()
+    elif m[0]=='region':
+     for key,field in self.region_fields.items(): field.delete(0,'end'); field.insert(0,str(m[1][key]))
     elif m[0]=='status':self.status.config(text=m[1])
     elif m[0]=='state':self.state=m[1]; self.status.config(text=m[2]); self.refresh()
     elif m[0]=='error':self.state='idle'; self.refresh(); self.status.config(text='發生錯誤'); messagebox.showerror('錯誤',m[1])
@@ -122,9 +163,10 @@ class App:
   self.root.after(150,self.poll)
  def close(self):
   self.stop_event.set(); self.state='closing'
-  if self.driver:
-   try:self.driver.quit()
+  for driver in self.drivers:
+   try:driver.quit()
    except Exception:pass
+  self.drivers.clear(); self.driver=None
   self.root.destroy()
 
 if __name__=='__main__':

@@ -1,6 +1,8 @@
 """Record a selected Chrome tab and convert the chosen region to MP4."""
 import http.server
 import json
+import math
+import os
 import secrets
 import subprocess
 import tempfile
@@ -27,10 +29,10 @@ function key(e){if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagati
 document.addEventListener('keydown',key,true);
 overlay.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();start=[e.clientX,e.clientY];overlay.setPointerCapture(e.pointerId);box.style.display='block';});
 overlay.addEventListener('pointermove',e=>{if(!start)return;const x=Math.min(start[0],e.clientX), y=Math.min(start[1],e.clientY); Object.assign(box.style,{left:x+'px',top:y+'px',width:Math.abs(e.clientX-start[0])+'px',height:Math.abs(e.clientY-start[1])+'px'});});
-overlay.addEventListener('pointerup',e=>{if(!start)return; e.preventDefault();e.stopPropagation();const x=Math.min(start[0],e.clientX),y=Math.min(start[1],e.clientY),w=Math.abs(e.clientX-start[0]),h=Math.abs(e.clientY-start[1]); if(w<4||h<4){start=null;box.style.display='none';return;} end({x:x/window.innerWidth,y:y/window.innerHeight,w:w/window.innerWidth,h:h/window.innerHeight});});'''
+overlay.addEventListener('pointerup',e=>{if(!start)return; e.preventDefault();e.stopPropagation();const x=Math.min(start[0],e.clientX),y=Math.min(start[1],e.clientY),w=Math.abs(e.clientX-start[0]),h=Math.abs(e.clientY-start[1]); if(w<4||h<4){start=null;box.style.display='none';return;} end({x:Math.round(x),y:Math.round(y),w:Math.round(w),h:Math.round(h)});});'''
 
 PAGE = r'''<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>ClickPilot 錄影</title><body style="font:18px sans-serif;padding:2em">
-<h2>ClickPilot 分頁錄影</h2><p>請在分享視窗選擇剛才框選的 Chrome 分頁，並勾選「分享分頁音訊」。</p><button id="start">選擇分頁並開始錄影</button><p id="status">等待選擇分頁</p>
+<h2>ClickPilot 分頁錄影</h2><p>正在自動錄製第一個分頁的畫面與聲音。</p><button id="start">開始錄影</button><p id="status">準備錄影</p>
 <script>
 let stream, recorder, uploads=Promise.resolve(), failure=null; window.captureState='waiting';
 const status=document.querySelector('#status');
@@ -58,9 +60,37 @@ window.captureStop=()=>new Promise((resolve,reject)=>{
 });
 </script></body></html>'''
 
+def region_path():
+    return Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'ClickPilot' / 'last_video_region.json'
+
+
+def validate_region(region):
+    if not isinstance(region, dict) or any(isinstance(region.get(k), bool) or not isinstance(region.get(k), (int, float)) or not math.isfinite(region[k]) for k in ('x', 'y', 'w', 'h')):
+        raise ValueError('錄影範圍必須包含有效的 x、y、w、h 數字')
+    if region['x'] < 0 or region['y'] < 0 or region['w'] < 4 or region['h'] < 4:
+        raise ValueError('x、y 必須為非負數，w、h 至少為 4')
+    return {k: region[k] for k in ('x', 'y', 'w', 'h')}
+
+
+def load_region():
+    try:
+        value = json.loads(region_path().read_text(encoding='utf-8'))
+        return validate_region(value)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def save_region(region):
+    region = validate_region(region)
+    path = region_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(region), encoding='utf-8')
+
+
 class TabVideoRecorder:
-    def __init__(self, driver, stop_event):
+    def __init__(self, driver, stop_event, on_region_changed=None):
         self.driver, self.stop_event = driver, stop_event
+        self.on_region_changed = on_region_changed
         self.server = self.helper = self.target = self.tmp = None
         self.state = 'idle'
         self.output = None
@@ -76,28 +106,54 @@ class TabVideoRecorder:
             if self.target in self.driver.window_handles:
                 self._switch(self.target)
 
-    def start(self):
+    def start(self, reuse_region=False, region=None):
         if self.state == 'paused':
             self._helper_call('window.captureResume()')
             self.state = 'recording'
             return
         if self.state != 'idle':
             raise RuntimeError('已有進行中的分頁錄影。')
-        self.target = self.driver.current_window_handle
-        self.driver.execute_script(SELECT_REGION)
-        selection = None
-        try:
-            while not self.stop_event.is_set():
-                selection = self.driver.execute_script('return window.__clickpilotSelection')
-                if selection is not None: break
-                time.sleep(.15)
-        finally:
-            if selection is None:
-                self.driver.execute_script("window.__clickpilotCancelSelection?.()")
-        region = selection['value'] if selection else None
-        if not region:
-            raise RuntimeError('已取消選取錄影範圍。')
-        self.region = region
+        self.target = getattr(self.driver, '_clickpilot_first_tab', None)
+        marker = getattr(self.driver, '_clickpilot_capture_marker', None)
+        if not self.target or self.target not in self.driver.window_handles or not marker:
+            raise RuntimeError('找不到程式開啟的第一個分頁，請重新開啟 Chrome。')
+        self._switch(self.target)
+        viewport = self.driver.execute_script('return {w:window.innerWidth,h:window.innerHeight}')
+        if region is not None:
+            region = validate_region(region)
+        elif reuse_region:
+            region = load_region()
+            if region is None:
+                # Older versions saved ratios; convert them using the current viewport.
+                try:
+                    legacy = json.loads(region_path().read_text(encoding='utf-8'))
+                    if any(isinstance(legacy.get(k), bool) or not isinstance(legacy.get(k), (int, float)) or not math.isfinite(legacy[k]) for k in ('x','y','w','h')) or legacy['x'] < 0 or legacy['y'] < 0 or legacy['w'] <= 0 or legacy['h'] <= 0 or legacy['x'] + legacy['w'] > 1 or legacy['y'] + legacy['h'] > 1:
+                        raise ValueError('invalid legacy region')
+                    region = validate_region({'x':round(legacy['x']*viewport['w']), 'y':round(legacy['y']*viewport['h']), 'w':round(legacy['w']*viewport['w']), 'h':round(legacy['h']*viewport['h'])})
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    raise RuntimeError('沒有可用的上次錄影範圍，請先取消勾選並框選一次。')
+        else:
+            self.driver.execute_script(SELECT_REGION)
+            selection = None
+            try:
+                while not self.stop_event.is_set():
+                    selection = self.driver.execute_script('return window.__clickpilotSelection')
+                    if selection is not None: break
+                    time.sleep(.15)
+            finally:
+                if selection is None:
+                    self.driver.execute_script("window.__clickpilotCancelSelection?.()")
+            region = selection['value'] if selection else None
+            if not region:
+                raise RuntimeError('已取消選取錄影範圍。')
+            region = validate_region(region)
+        viewport = self.driver.execute_script('return {w:window.innerWidth,h:window.innerHeight}')
+        if region['x'] + region['w'] > viewport['w'] or region['y'] + region['h'] > viewport['h']:
+            raise ValueError('錄影範圍超出目前分頁可視區域，請調整視窗或範圍。')
+        save_region(region)
+        if self.on_region_changed: self.on_region_changed(region.copy())
+        self.region = {'x': region['x']/viewport['w'], 'y': region['y']/viewport['h'], 'w': region['w']/viewport['w'], 'h': region['h']/viewport['h']}
+        original_title = self.driver.execute_script('const t=document.title; document.title=arguments[0]; return t;', marker)
         self.tmp = tempfile.TemporaryDirectory(prefix='clickpilot-video-')
         self.source = Path(self.tmp.name) / 'capture.webm'
         self.source.touch()
@@ -127,17 +183,22 @@ class TabVideoRecorder:
             self.driver.switch_to.new_window('tab'); self.helper=self.driver.current_window_handle
             self.driver.get(f'http://127.0.0.1:{self.server.server_port}/{token}/')
             self.driver.find_element(By.ID,'start').click()
-            while not self.stop_event.is_set():
+            deadline = time.monotonic() + 30
+            while not self.stop_event.is_set() and time.monotonic() < deadline:
                 state = self.driver.execute_script('return window.captureState')
                 if state == 'recording': break
                 if state == 'error': raise RuntimeError(self.driver.execute_script('return window.captureError()'))
                 time.sleep(.2)
             else:
-                raise RuntimeError('已停止等待分頁分享。')
+                raise RuntimeError('自動選取第一個分頁失敗或已取消，請重新開啟 Chrome 後再試。')
             self._switch(self.target)
+            self.driver.execute_script('if(document.title===arguments[0]) document.title=arguments[1]', marker, original_title)
             self.state='recording'
         except Exception:
-            self.cleanup(); raise
+            self.cleanup()
+            try: self.driver.execute_script('if(document.title===arguments[0]) document.title=arguments[1]', marker, original_title)
+            except Exception: pass
+            raise
 
     def pause(self):
         if self.state != 'recording': raise RuntimeError('沒有進行中的分頁錄影。')

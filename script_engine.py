@@ -5,8 +5,12 @@ Recorder and clipboard handling adapted from funny4875/DocPilot script_engine.py
 import ctypes
 import json
 import math
+import secrets
 import time
+from urllib.parse import urlsplit
 import win32clipboard
+from selenium.webdriver.chrome.webdriver import WebDriver as ChromeDriver
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import (StaleElementReferenceException,
@@ -133,6 +137,25 @@ def paste_text(element, value):
             win32clipboard.CloseClipboard()
 
 
+def create_browser():
+    marker = 'ClickPilotCapture' + secrets.token_hex(16)
+    options = Options()
+    options.set_capability('goog:loggingPrefs', {'browser': 'ALL'})
+    options.add_argument('--auto-select-tab-capture-source-by-title=' + marker)
+    driver = ChromeDriver(options=options)
+    driver._clickpilot_capture_marker = marker
+    driver._clickpilot_first_tab = driver.current_window_handle
+    return driver
+
+
+def valid_url(url):
+    try:
+        parsed = urlsplit(url)
+        return parsed.scheme.lower() in ('http', 'https') and bool(parsed.hostname) and not any(c.isspace() for c in url) and parsed.port != 0
+    except (TypeError, ValueError):
+        return False
+
+
 def parse_script(content):
     steps = []
     for number, line in enumerate(content.splitlines(), 1):
@@ -140,11 +163,18 @@ def parse_script(content):
             continue
         try:
             step = json.loads(line)
-            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'video_start', 'video_pause', 'video_stop'):
+            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'navigate', 'video_start', 'video_pause', 'video_stop'):
                 raise ValueError('需指定有效的 action')
             action = step['action']
-            if action not in ('wait', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
+            if action not in ('wait', 'navigate', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
                 raise ValueError('需指定有效的 xpath')
+            if action == 'navigate' and not valid_url(step.get('url')):
+                raise ValueError('url 必須是完整的 http:// 或 https:// 網址')
+            if action == 'video_start' and any(k in step for k in ('x','y','w','h')):
+                from video_recorder import validate_region
+                validate_region(step)
+            if action == 'video_start' and 'reuse_region' in step and not isinstance(step['reuse_region'], bool):
+                raise ValueError('reuse_region 必須是 true 或 false')
             if 'name' in step and not isinstance(step['name'], str):
                 raise ValueError('name 必須是文字')
             if step.get('error'):
@@ -172,11 +202,11 @@ class Stopped(Exception):
     pass
 
 
-def run_script(driver, steps, count, variables, stop, progress):
+def run_script(driver, steps, count, variables, stop, progress, on_driver_changed=None, on_region_changed=None):
     from video_recorder import TabVideoRecorder
-    recorder = TabVideoRecorder(driver, stop)
+    recorder = TabVideoRecorder(driver, stop, on_region_changed)
     try:
-        _run_script(driver, steps, count, variables, stop, progress, recorder)
+        _run_script(driver, steps, count, variables, stop, progress, recorder, on_driver_changed)
         if recorder.state != 'idle':
             raise RuntimeError('腳本結束時分頁錄影尚未結束，請加入結束錄影指令。')
         return recorder.output
@@ -188,7 +218,7 @@ def run_script(driver, steps, count, variables, stop, progress):
                 recorder.cleanup()
 
 
-def _run_script(driver, steps, count, variables, stop, progress, recorder):
+def _run_script(driver, steps, count, variables, stop, progress, recorder, on_driver_changed):
     for cycle in range(1, count + 1):
         for line, step in steps:
             if stop.is_set():
@@ -197,7 +227,9 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder):
             progress(cycle, line, step)
             try:
                 if action == 'video_start':
-                    recorder.start()
+                    if recorder.state == 'idle': recorder.driver = driver
+                    region = {k:step[k] for k in ('x','y','w','h')} if 'x' in step else None
+                    recorder.start(reuse_region=step.get('reuse_region', False), region=region)
                     continue
                 if action == 'video_pause':
                     recorder.pause()
@@ -206,11 +238,24 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder):
                     output = recorder.finish()
                     progress(cycle, line, {'name': f'影片已儲存：{output}'})
                     continue
+                if action == 'navigate':
+                    new_driver = create_browser()
+                    try:
+                        new_driver.get(step['url'])
+                        if on_driver_changed:
+                            on_driver_changed(new_driver)
+                    except Exception:
+                        new_driver.quit()
+                        raise
+                    driver = new_driver
+                    continue
                 if action == 'wait':
                     if stop.wait(step['seconds']):
                         raise Stopped()
                     continue
-                deadline = time.monotonic() + step.get('timeout', 5)
+                deadline = time.monotonic() + step.get('timeout', 15)
+                stable_element = None
+                stable_since = None
                 value = step.get('value', '')
                 for name, replacement in variables.items():
                     value = value.replace('${' + name + '}', replacement)
@@ -222,6 +267,14 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder):
                         element = next((e for e in elements if e.is_displayed() and e.is_enabled()), None)
                         if element is not None:
                             if action == 'wait_for': break
+                            current = (element.id, element.rect)
+                            if current != stable_element:
+                                stable_element, stable_since = current, time.monotonic()
+                            if time.monotonic() - stable_since < min(.4, step.get('timeout', 15) * .25):
+                                element = None
+                        else:
+                            stable_element, stable_since = None, None
+                        if element is not None:
                             if action == 'click': element.click()
                             elif action == 'clear': element.clear()
                             elif action == 'send_keys': element.send_keys(value)
@@ -229,10 +282,10 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder):
                             elif action == 'key': element.send_keys(getattr(Keys, value.upper()))
                             break
                     except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException):
-                        pass
+                        stable_element, stable_since = None, None
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise TimeoutError(f"等待可見且可操作的元件超過 {step.get('timeout', 5)} 秒：{step['xpath']}")
+                        raise TimeoutError(f"等待可見且可操作的元件超過 {step.get('timeout', 15)} 秒：{step['xpath']}")
                     if stop.wait(min(.2, remaining)):
                         raise Stopped()
 
@@ -264,7 +317,7 @@ def read_recording(driver):
             payload = json.loads(message[message.index('"' + marker):])
             action = json.loads(payload[len(marker):])
             action.setdefault('name', '')
-            action.setdefault('timeout', 5)
+            action.setdefault('timeout', 15)
             actions.append(action)
         except (ValueError, TypeError):
             continue
