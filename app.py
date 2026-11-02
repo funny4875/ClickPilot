@@ -24,6 +24,7 @@ class App:
   ttk.Label(video_bar,text='插入指令：').pack(side='left')
   ttk.Button(video_bar,text='等待秒數',command=self.insert_wait_step).pack(side='left',padx=2)
   ttk.Button(video_bar,text='開啟網址',command=self.insert_url_step).pack(side='left',padx=2)
+  ttk.Button(video_bar,text='關閉 Chrome',command=lambda:self.insert_step({'name':'關閉 Chrome','action':'close_browser'})).pack(side='left',padx=2)
   self.reuse_region=tk.BooleanVar(value=False)
   ttk.Checkbutton(video_bar,text='沿用上次錄影範圍',variable=self.reuse_region).pack(side='left',padx=5)
   for label,action in [('開始錄影','video_start'),('暫停錄影','video_pause'),('結束錄影','video_stop')]:
@@ -36,7 +37,30 @@ class App:
    ttk.Label(region_bar,text=key.upper()).pack(side='left',padx=(5,1))
    field=ttk.Entry(region_bar,width=7); field.pack(side='left'); self.region_fields[key]=field
    if key in saved_region: field.insert(0,str(saved_region[key]))
+  experimental=ttk.Frame(root,padding=(8,4)); experimental.pack(fill='x')
+  ttk.Label(experimental,text='實驗功能 XPath：').pack(side='left')
+  self.xpath_entry=ttk.Entry(experimental); self.xpath_entry.pack(side='left',fill='x',expand=True,padx=5)
+  self.get_text_btn=ttk.Button(experimental,text='取得文字',command=self.get_xpath_text); self.get_text_btn.pack(side='left')
   frame=ttk.Frame(root,padding=8); frame.pack(fill='both',expand=True); self.lines=tk.Text(frame,width=5,state='disabled',takefocus=0,bg='#eeeeee',wrap='none'); self.lines.grid(row=0,column=0,sticky='ns'); self.editor=tk.Text(frame,wrap='none',undo=True); self.editor.grid(row=0,column=1,sticky='nsew'); y=ttk.Scrollbar(frame,orient='vertical',command=self.scroll); self.ybar=y; y.grid(row=0,column=2,sticky='ns'); x=ttk.Scrollbar(frame,orient='horizontal',command=self.editor.xview); x.grid(row=1,column=1,sticky='ew'); self.editor.configure(yscrollcommand=self.yscroll,xscrollcommand=x.set); frame.rowconfigure(0,weight=1); frame.columnconfigure(1,weight=1); self.editor.bind('<<Modified>>',self.modified); self.refresh(); root.after(150,self.poll); root.protocol('WM_DELETE_WINDOW',self.close)
+ def get_xpath_text(self):
+  xpath=self.xpath_entry.get().strip()
+  if not xpath: messagebox.showerror('XPath 錯誤','請輸入 XPath。',parent=self.root); return
+  if self.driver is None or self.state!='idle': return
+  driver=self.driver; self.state='busy'; self.refresh(); self.status.config(text='正在取得文字')
+  def work():
+   try:
+    elements=driver.find_elements(By.XPATH,xpath)
+    if not elements: raise ValueError('找不到符合 XPath 的元素。')
+    text=elements[0].get_property('textContent') or ''
+    self.q.put(('xpath_text',text))
+   except Exception as e:self.q.put(('error',str(e)))
+  self.worker(work)
+ def show_xpath_text(self,text):
+  window=tk.Toplevel(self.root); window.title('XPath 文字內容'); window.geometry('640x400')
+  frame=ttk.Frame(window,padding=8); frame.pack(fill='both',expand=True)
+  result=tk.Text(frame,wrap='word'); result.pack(side='left',fill='both',expand=True)
+  scroll=ttk.Scrollbar(frame,orient='vertical',command=result.yview); scroll.pack(side='right',fill='y'); result.configure(yscrollcommand=scroll.set)
+  result.insert('1.0',text); result.config(state='disabled'); result.focus_set()
  def insert_video_step(self,action,name):
   data={'name':name,'action':action}
   if action=='video_start' and self.reuse_region.get():
@@ -72,7 +96,8 @@ class App:
  def refresh(self):
   connected=self.driver is not None
   for k,enabled in {'開啟 Chrome':self.state=='idle','開始錄製':connected and self.state in ('idle','paused'),'暫停錄製':self.state=='recording','結束錄製':self.state in ('recording','paused'),'開啟腳本':self.state=='idle','存檔':self.state in ('idle','paused')}.items(): self.buttons[k].config(state='normal' if enabled else 'disabled')
-  self.buttons['開始錄製'].config(text='繼續錄製' if self.state=='paused' else '開始錄製'); self.runbtn.config(state='normal' if connected and self.state=='idle' else 'disabled'); self.stopbtn.config(state='normal' if self.state=='running' else 'disabled')
+  self.get_text_btn.config(state='normal' if connected and self.state=='idle' else 'disabled')
+  self.buttons['開始錄製'].config(text='繼續錄製' if self.state=='paused' else '開始錄製'); self.runbtn.config(state='normal' if self.state=='idle' else 'disabled'); self.stopbtn.config(state='normal' if self.state=='running' else 'disabled')
  def worker(self,fn): threading.Thread(target=fn,daemon=True).start()
  def open_browser(self):
   url=self.url.get().strip()
@@ -80,7 +105,10 @@ class App:
   self.state='busy'; self.refresh()
   def work():
    try:
-    if self.driver: self.driver.quit()
+    if self.driver:
+     self.driver.quit()
+     if self.driver in self.drivers: self.drivers.remove(self.driver)
+     self.driver=None
     self.driver=script_engine.create_browser(); self.drivers.append(self.driver); self.driver.get(url); self.q.put(('state','idle','Chrome 已開啟'))
    except Exception as e: self.driver=None; self.q.put(('error',str(e)))
   self.worker(work)
@@ -136,7 +164,10 @@ class App:
      self.q.put(('status',f'第 {cycle}/{count} 次，第 {line} 行：{step.get("name") or step["action"]}'))
     def use_driver(driver):
      if self.state=='closing': raise RuntimeError('程式正在關閉。')
-     self.drivers.append(driver); self.driver=driver
+     if driver is None:
+      if self.driver in self.drivers: self.drivers.remove(self.driver)
+     else: self.drivers.append(driver)
+     self.driver=driver
     output=script_engine.run_script(self.driver,steps,count,values,self.stop_event,progress,use_driver,lambda region:self.q.put(('region',region)))
     self.q.put(('state','idle',f'影片已儲存：{output}' if output else '執行完成'))
    except script_engine.Stopped:self.q.put(('state','idle','已停止執行'))
@@ -154,6 +185,8 @@ class App:
      if self.state=='pausing': self.state='paused'; self.status.config(text='已暫停')
      elif self.state=='finishing': self.state='idle'; self.status.config(text='錄製完成')
      self.refresh()
+    elif m[0]=='xpath_text':
+     self.state='idle'; self.status.config(text='已取得文字'); self.refresh(); self.show_xpath_text(m[1])
     elif m[0]=='region':
      for key,field in self.region_fields.items(): field.delete(0,'end'); field.insert(0,str(m[1][key]))
     elif m[0]=='status':self.status.config(text=m[1])

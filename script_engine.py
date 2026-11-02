@@ -163,10 +163,10 @@ def parse_script(content):
             continue
         try:
             step = json.loads(line)
-            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'navigate', 'video_start', 'video_pause', 'video_stop'):
+            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'navigate', 'close_browser', 'video_start', 'video_pause', 'video_stop'):
                 raise ValueError('需指定有效的 action')
             action = step['action']
-            if action not in ('wait', 'navigate', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
+            if action not in ('wait', 'navigate', 'close_browser', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
                 raise ValueError('需指定有效的 xpath')
             if action == 'navigate' and not valid_url(step.get('url')):
                 raise ValueError('url 必須是完整的 http:// 或 https:// 網址')
@@ -226,6 +226,16 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder, on_dr
             action = step['action']
             progress(cycle, line, step)
             try:
+                if driver is None and action not in ('wait', 'navigate', 'video_pause', 'video_stop') and not (action == 'video_start' and recorder.state == 'paused'):
+                    raise RuntimeError('目前沒有開啟 Chrome，請先加入「開啟網址」指令。')
+                if action == 'close_browser':
+                    if recorder.state != 'idle' and recorder.driver is driver:
+                        raise RuntimeError('目前 Chrome 正在錄影，請先加入「結束錄影」指令。')
+                    driver.quit()
+                    driver = None
+                    if on_driver_changed:
+                        on_driver_changed(None)
+                    continue
                 if action == 'video_start':
                     if recorder.state == 'idle': recorder.driver = driver
                     region = {k:step[k] for k in ('x','y','w','h')} if 'x' in step else None
