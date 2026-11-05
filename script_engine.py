@@ -5,6 +5,7 @@ Recorder and clipboard handling adapted from funny4875/DocPilot script_engine.py
 import ctypes
 import json
 import math
+import re
 import secrets
 import time
 from urllib.parse import urlsplit
@@ -159,7 +160,7 @@ def valid_url(url):
 def parse_script(content):
     steps = []
     for number, line in enumerate(content.splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith('#'):
+        if not line.strip() or line.lstrip().startswith('#') or re.fullmatch(r'<====.*====>', line.strip()):
             continue
         try:
             step = json.loads(line)

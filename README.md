@@ -22,7 +22,7 @@ ClickPilot 是 Windows 上的 Chrome 操作錄製與重播工具。將網頁操�
 {"name":"輸入 PIN","action":"send_keys","xpath":"/html[1]/body[1]/input[1]","value":"${PIN}","timeout":5}
 ```
 
-支援 `click`、`clear`、`send_keys`、`paste`、`key`、`wait`、`wait_for`、`navigate` 與 `close_browser`。可使用「等待秒數」及「開啟網址」按鈕，在游標所在行插入指令。開啟網址會建立新的 Chrome 視窗，後續腳本操作會在新視窗執行；原有視窗會保留至程式關閉。「關閉 Chrome」指令會關閉目前腳本使用的瀏覽器；若正在錄影，請先結束錄影。程式啟動後可直接執行腳本，例如先執行「開啟網址」。`key` 支援 `ENTER`、`TAB`、`ESCAPE`；空行與 `#` 開頭的註解會略過。
+支援 `click`、`clear`、`send_keys`、`paste`、`key`、`wait`、`wait_for`、`navigate` 與 `close_browser`。可使用「等待」及「開啟網址」按鈕，在游標所在行插入指令。「等待」接受時:分:秒、分:秒或秒數。開啟網址會建立新的 Chrome 視窗，後續腳本操作會在新視窗執行；原有視窗會保留至程式關閉。「關閉 Chrome」指令會關閉目前腳本使用的瀏覽器；若正在錄影，請先結束錄影。程式啟動後可直接執行腳本，例如先執行「開啟網址」。`key` 支援 `ENTER`、`TAB`、`ESCAPE`；空行與 `#` 開頭的註解會略過。
 
 ```json
 {"name":"等待清單","action":"wait_for","xpath":"//*[@id='list']","timeout":30}
@@ -64,6 +64,6 @@ py app.py
 {"name":"結束錄影","action":"video_stop"}
 ```
 
-## 實驗功能：取得 XPath 文字
+## 取得 XPath 文字
 
-開啟 Chrome 並進入網頁後，在「實驗功能 XPath」輸入 XPath，按「取得文字」，會顯示第一個符合元素的文字內容（包含子元素文字），可在結果視窗選取及複製。此功能直接讀取目前瀏覽器分頁，不會插入腳本；若找不到元素或 XPath 格式無效會顯示錯誤。
+開啟 Chrome 並進入網頁後，輸入 XPath 並按「取得 XPath 文字」，會將第一個符合元素的文字內容（包含子元素文字）複製到剪貼簿，並在狀態列顯示通知。此功能直接讀取目前瀏覽器分頁，不會插入腳本；若找不到元素或 XPath 格式無效會顯示錯誤。

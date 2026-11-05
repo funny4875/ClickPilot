@@ -72,6 +72,9 @@ def validate_region(region):
     return {k: region[k] for k in ('x', 'y', 'w', 'h')}
 
 
+def video_output_dir():
+    return Path.home() / 'Videos' / 'ClickPilot'
+
 def load_region():
     try:
         value = json.loads(region_path().read_text(encoding='utf-8'))
@@ -212,7 +215,7 @@ class TabVideoRecorder:
         result = self.driver.execute_async_script("const done=arguments[arguments.length-1]; window.captureStop().then(()=>done(null),e=>done(String(e)))")
         if result: raise RuntimeError(result)
         if self.target in self.driver.window_handles: self._switch(self.target)
-        output_dir = Path.home() / 'Videos' / 'ClickPilot'
+        output_dir = video_output_dir()
         output_dir.mkdir(parents=True,exist_ok=True)
         self.output = output_dir / (time.strftime('%Y%m%d-%H%M%S-') + secrets.token_hex(3) + '.mp4')
         r=self.region
