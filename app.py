@@ -12,9 +12,11 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support import expected_conditions as EC
 
 
+APP_VERSION = '1.0.4'
+
 class App:
  def __init__(self, root):
-  self.root=root; root.title('ClickPilot - Chrome 操作錄製器'); root.iconbitmap(str(Path(__file__).resolve().parent / 'assets' / 'icon.ico')); root.geometry('1100x700'); self.driver=None; self.drivers=[]; self.state='idle'; self.q=queue.Queue(); self.stop_event=threading.Event()
+  self.root=root; root.title(f'ClickPilot v{APP_VERSION} - Chrome 操作錄製器'); root.iconbitmap(str(Path(__file__).resolve().parent / 'assets' / 'icon.ico')); root.geometry('1100x700'); self.driver=None; self.drivers=[]; self.state='idle'; self.q=queue.Queue(); self.stop_event=threading.Event()
   self.window_settings_path=Path(os.environ.get('LOCALAPPDATA',str(Path.home()))) / 'ClickPilot' / 'window.json'
   try:
    settings=json.loads(self.window_settings_path.read_text(encoding='utf-8'))
