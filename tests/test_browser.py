@@ -82,6 +82,35 @@ class BrowserTests(unittest.TestCase):
         self.assertGreater(time.monotonic()-start, .4)
         self.assertEqual(self.driver.find_element(By.ID, 'result').text, 'hello')
 
+    def test_read_and_ocr_variables(self):
+        import json
+        self.driver.execute_script("document.body.innerHTML='<span id=source>Alice</span><input id=old value=42 disabled><input id=field><div id=picture>AB12</div>'")
+        steps = [
+            {'action':'read_text','xpath':'//*[@id="source"]','into':'name'},
+            {'action':'read_value','xpath':'//*[@id="old"]','into':'number'},
+            {'action':'set','into':'message','value':'${name}: ${number}'},
+            {'action':'send_keys','xpath':'//*[@id="field"]','value':'${message}'},
+        ]
+        parsed = script_engine.parse_script('\n'.join(map(json.dumps, steps)))
+        self.assertEqual(script_engine.required_inputs(parsed), [])
+        script_engine.run_script(self.driver, parsed, 1, {}, threading.Event(), lambda *a: None)
+        self.assertEqual(self.driver.find_element(By.ID,'field').get_property('value'), 'Alice: 42')
+        steps = [
+            {'action':'ocr','xpath':'//*[@id="picture"]','into':'code'},
+            {'action':'clear','xpath':'//*[@id="field"]'},
+            {'action':'send_keys','xpath':'//*[@id="field"]','value':'${code}'},
+        ]
+        parsed = script_engine.parse_script('\n'.join(map(json.dumps, steps)))
+        with patch.object(script_engine.ImageRecognizer, 'recognize', return_value='AB12') as recognize:
+            script_engine.run_script(self.driver, parsed, 2, {}, threading.Event(), lambda *a: None)
+            self.assertEqual(recognize.call_count, 2)
+            self.assertTrue(recognize.call_args.args[0].startswith(b'\x89PNG'))
+        self.assertEqual(self.driver.find_element(By.ID,'field').get_property('value'), 'AB12')
+        with patch.object(script_engine.ImageRecognizer, 'recognize', side_effect=ValueError('empty')):
+            with self.assertRaisesRegex(RuntimeError, 'empty'):
+                script_engine.run_script(self.driver, parsed, 1, {}, threading.Event(), lambda *a: None)
+        self.assertEqual(self.driver.find_element(By.ID,'field').get_property('value'), 'AB12')
+
     def test_timeout_and_stop(self):
         steps = script_engine.parse_script('# heading\n{"name":"missing","action":"click","xpath":"//*[@id=\'missing\']","timeout":0.4}')
         with self.assertRaisesRegex(RuntimeError, '第 1 次、第 2 行（missing）失敗'):

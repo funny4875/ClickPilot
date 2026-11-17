@@ -12,7 +12,7 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.support import expected_conditions as EC
 
 
-APP_VERSION = '1.0.4'
+APP_VERSION = '1.0.5'
 
 class App:
  def __init__(self, root):
@@ -42,13 +42,17 @@ class App:
   self.always_on_top=tk.BooleanVar(value=False)
   ttk.Checkbutton(bar,text='視窗置頂',variable=self.always_on_top,command=self.apply_topmost).pack(side='right',padx=5)
   video_bar=ttk.LabelFrame(root,text='插入指令區',padding=(8,4)); video_bar.pack(fill='x',padx=8,pady=4)
-  command_row=ttk.Frame(video_bar); command_row.pack(fill='x',pady=2)
+  tabs=ttk.Notebook(video_bar); tabs.pack(fill='x')
+  general=ttk.Frame(tabs,padding=4); data_tab=ttk.Frame(tabs,padding=4); video_tab=ttk.Frame(tabs,padding=4)
+  tabs.add(general,text='一般操作'); tabs.add(data_tab,text='圖片辨識'); tabs.add(video_tab,text='錄影')
+  self.build_data_tools(data_tab)
+  command_row=ttk.Frame(general); command_row.pack(fill='x',pady=2)
   ttk.Button(command_row,text='開啟網址',command=self.insert_url_step).pack(side='left',padx=2)
   ttk.Button(command_row,text='等待',command=self.insert_wait_step).pack(side='left',padx=2)
   ttk.Button(command_row,text='關閉 Chrome',command=lambda:self.insert_step({'name':'關閉 Chrome','action':'close_browser'})).pack(side='left',padx=2)
   self.reuse_region=tk.BooleanVar(value=False)
-  ttk.Checkbutton(video_bar,text='沿用上次錄影範圍',variable=self.reuse_region).pack(anchor='w',padx=2,pady=2)
-  region_bar=ttk.Frame(video_bar); region_bar.pack(fill='x',pady=2)
+  ttk.Checkbutton(video_tab,text='沿用上次錄影範圍',variable=self.reuse_region).pack(anchor='w',padx=2,pady=2)
+  region_bar=ttk.Frame(video_tab); region_bar.pack(fill='x',pady=2)
   ttk.Label(region_bar,text='錄影範圍（網頁 CSS 像素）：').pack(side='left')
   self.region_fields={}
   saved_region=video_recorder.load_region() or {}
@@ -56,18 +60,36 @@ class App:
    ttk.Label(region_bar,text=key.upper()).pack(side='left',padx=(5,1))
    field=ttk.Entry(region_bar,width=7); field.pack(side='left'); self.region_fields[key]=field
    if key in saved_region: field.insert(0,str(saved_region[key]))
-  recording_row=ttk.Frame(video_bar); recording_row.pack(fill='x',pady=2)
+  recording_row=ttk.Frame(video_tab); recording_row.pack(fill='x',pady=2)
   for label,action in [('開始錄影','video_start'),('暫停錄影','video_pause'),('結束錄影','video_stop')]:
    ttk.Button(recording_row,text=label,command=lambda a=action,n=label:self.insert_video_step(a,n)).pack(side='left',padx=2)
   ttk.Button(recording_row,text='開啟錄影資料夾',command=self.open_video_folder).pack(side='left',padx=2)
-  experimental=ttk.Frame(video_bar); experimental.pack(fill='x',pady=2)
+  experimental=ttk.Frame(general); experimental.pack(fill='x',pady=2)
   ttk.Label(experimental,text='XPath：').pack(side='left')
   self.xpath_entry=ttk.Entry(experimental); self.xpath_entry.pack(side='left',fill='x',expand=True,padx=5)
   self.get_text_btn=ttk.Button(experimental,text='取得 XPath 文字',command=self.get_xpath_text); self.get_text_btn.pack(side='left')
-  self.xpath_notice=ttk.Label(video_bar,text='',foreground='red'); self.xpath_notice.pack(anchor='w',padx=2)
+  self.xpath_notice=ttk.Label(general,text='',foreground='red'); self.xpath_notice.pack(anchor='w',padx=2)
   self.clipboard_shortcut_down=False; root.after(50,self.watch_clipboard_shortcuts)
   frame=ttk.Frame(root,padding=8); frame.pack(fill='both',expand=True); self.lines=tk.Text(frame,width=5,state='disabled',takefocus=0,bg='#eeeeee',wrap='none'); self.lines.grid(row=0,column=0,sticky='ns'); self.editor=tk.Text(frame,wrap='none',undo=True); self.editor.grid(row=0,column=1,sticky='nsew'); y=ttk.Scrollbar(frame,orient='vertical',command=self.scroll); self.ybar=y; y.grid(row=0,column=2,sticky='ns'); x=ttk.Scrollbar(frame,orient='horizontal',command=self.editor.xview); x.grid(row=1,column=1,sticky='ew'); self.editor.configure(yscrollcommand=self.yscroll,xscrollcommand=x.set); frame.rowconfigure(0,weight=1); frame.columnconfigure(1,weight=1); self.editor.bind('<<Modified>>',self.modified); self.refresh(); root.after(150,self.poll); root.protocol('WM_DELETE_WINDOW',self.close)
   self.restore_inputs()
+ def build_data_tools(self,parent):
+  parent.columnconfigure(1,weight=1)
+  self.data_fields={}
+  for row,(key,label) in enumerate([('source','辨識圖片來源圖片 XPath'),('target','辨識結果輸入欄位 XPath')]):
+   ttk.Label(parent,text=label).grid(row=row,column=0,sticky='w',padx=4,pady=4)
+   field=ttk.Entry(parent); field.grid(row=row,column=1,sticky='ew',padx=4,pady=4); self.data_fields[key]=field
+  button=ttk.Button(parent,text='插入自動辨識填入之指令腳本',command=self.insert_data_steps)
+  button.grid(row=2,column=0,columnspan=2,sticky='w',padx=4,pady=4); self.data_buttons=[button]
+ def insert_data_steps(self):
+  if self.state not in ('idle','paused'): return
+  source=self.data_fields['source'].get().strip(); target=self.data_fields['target'].get().strip()
+  name='ocr_'+secrets.token_hex(6)
+  steps=[{'name':'辨識圖片文字','action':'ocr','xpath':source,'into':name,'timeout':15}, {'name':'清空輸入欄位','action':'clear','xpath':target}, {'name':'輸入辨識結果','action':'send_keys','xpath':target,'value':'${'+name+'}'}]
+  try: script_engine.parse_script('\n'.join(json.dumps(step,ensure_ascii=False) for step in steps))
+  except ValueError as e: messagebox.showerror('指令欄位錯誤',str(e),parent=self.root); return
+  self.editor.edit_separator()
+  for step in steps: self.insert_step(step)
+  self.editor.edit_separator()
  def apply_topmost(self): self.root.attributes('-topmost',self.always_on_top.get())
  def restore_inputs(self):
   self.input_settings_path=self.window_settings_path.with_name('inputs.json')
@@ -155,6 +177,7 @@ class App:
   if self.editor.edit_modified():
    n=int(self.editor.index('end-1c').split('.')[0]); self.lines.config(state='normal'); self.lines.delete('1.0','end'); self.lines.insert('1.0','\n'.join(map(str,range(1,n+1)))); self.lines.config(state='disabled'); self.editor.edit_modified(False)
  def refresh(self):
+  for button in self.data_buttons: button.config(state='normal' if self.state in ('idle','paused') else 'disabled')
   connected=self.driver is not None
   for k,enabled in {'開啟 Chrome':self.state=='idle','開始錄製':connected and self.state in ('idle','paused'),'暫停錄製':self.state=='recording','結束錄製':self.state in ('recording','paused'),'開啟腳本':self.state=='idle','存檔':self.state in ('idle','paused')}.items(): self.buttons[k].config(state='normal' if enabled else 'disabled')
   self.get_text_btn.config(state='normal' if connected and self.state=='idle' else 'disabled')
@@ -225,9 +248,10 @@ class App:
    count=int(self.count.get())
    if count<=0: raise ValueError('執行次數必須大於 0')
    steps=script_engine.parse_script(self.editor.get('1.0','end-1c'))
+   names=script_engine.required_inputs(steps)
   except (ValueError, TypeError) as e:
    messagebox.showerror('腳本錯誤',str(e)); return
-  names=set(re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}',json.dumps([s for _,s in steps],ensure_ascii=False))); values={}
+  values={}
   for name in sorted(names):
    v=simpledialog.askstring('變數',f'請輸入 {name} 的值',show='*',parent=self.root)
    if v is None:return

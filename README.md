@@ -4,7 +4,7 @@
 
 ClickPilot 是 Windows 上的 Chrome 操作錄製與重播工具。將網頁操作記錄為可編輯的 JSON Lines 腳本，再依指定次數執行。
 
-目前程式版本：**1.0.4**。視窗標題會顯示版本號；原始碼以 `main` 分支為準。
+目前程式版本：**1.0.5**。視窗標題會顯示版本號；原始碼以 `main` 分支為準。
 
 ## 主要功能
 
@@ -54,7 +54,7 @@ XPath 依賴網頁結構，網頁改版後可能需要調整。錄製使用 Chro
 
 ## 從原始碼執行和開發
 
-需要 Windows、Google Chrome、Git 和 Python（1.0.4 的 MSI 使用 Python 3.12 建置）。在 PowerShell 執行：
+需要 Windows、Google Chrome、Git 和 Python（1.0.5 的 MSI 使用 Python 3.12 建置）。在 PowerShell 執行：
 
 ```powershell
 git clone https://github.com/funny4875/ClickPilot.git
@@ -81,7 +81,7 @@ python -m unittest discover -s tests
 python -m pip install pyinstaller
 python -m PyInstaller --noconfirm ClickPilot.spec
 candle.exe installer.wxs
-light.exe -out ClickPilot-1.0.4.msi installer.wixobj
+light.exe -out ClickPilot-1.0.5.msi installer.wixobj
 ```
 
 程式視窗版本在 `app.py` 的 `APP_VERSION`，MSI 版本在 `installer.wxs` 的 `Product` `Version`；發佈新版時需同步更新。MSI 使用 per-user 安裝，並透過既有 UpgradeCode 支援升級。
@@ -109,3 +109,37 @@ light.exe -out ClickPilot-1.0.4.msi installer.wixobj
 ## 取得 XPath 文字
 
 開啟 Chrome 並進入網頁後，輸入 XPath 並按「取得 XPath 文字」，會將第一個符合元素的文字內容（包含子元素文字）複製到剪貼簿，並在該列下方顯示紅色通知。偵測到 Ctrl+C 或 Ctrl+V 後通知消失。此功能直接讀取目前瀏覽器分頁，不會插入腳本；若找不到元素或 XPath 格式無效會顯示錯誤。
+
+
+## 循序腳本：讀取、變數與圖片辨識
+
+「插入指令區」的「圖片辨識」分頁只需填入圖片來源 XPath 和結果輸入欄位 XPath，按「插入自動辨識填入之指令腳本」。程式會插入辨識、清空與輸入步驟，不會送出表單；按「執行腳本」才會執行。
+
+圖片辨識輸入範例（請更換為實際網頁 XPath）：
+
+```json
+{"action":"ocr","xpath":"//*[@id='Image1']","into":"captcha","case":"upper","timeout":15}
+{"action":"clear","xpath":"//*[@id='tbox_code']"}
+{"action":"send_keys","xpath":"//*[@id='tbox_code']","value":"${captcha}"}
+```
+
+讀取與組合文字：
+
+```json
+{"action":"read_text","xpath":"//*[@id='student_name']","into":"student"}
+{"action":"read_value","xpath":"//*[@id='class']","into":"class_name"}
+{"action":"set","into":"description","value":"${class_name}：${student}"}
+{"action":"send_keys","xpath":"//*[@id='description']","value":"${description}"}
+```
+
+讀取屬性使用 `{"action":"read_attribute","xpath":"//a","attribute":"href","into":"link"}`，取得 HTML 屬性原值；屬性不存在時停止並顯示行號。讀取指令接受可見的停用元件，輸入及點擊仍須可操作。
+
+本階段只支援文字變數，名稱須以英文字母或底線開頭，後續可使用英數與底線。`into` 宣告腳本產生的變數，必須在引用前賦值，否則執行前會提示行號。其他 `${NAME}` 保留舊版行為，在執行前要求輸入。替換只進行一次，讀到的 `${...}` 字面文字不會再次解讀。支援 value、xpath、url 和 attribute 中的變數；XPath 替換是原樣插入，含引號的內容需自行處理 XPath 語法。
+
+每次整份腳本重播都重設動態變數，重新讀取頁面及辨識圖片；執行結果不會寫回腳本或設定檔。UI 欄位中的固定文字及既有編輯區仍依原有儲存機制處理。
+
+OCR 的 `case` 可選 `keep`（保留）、`upper`（大寫）、`lower`（小寫）。來源可以是圖片或其他可見元件；img 元件會等待圖片載入完成再截圖。PNG 在記憶體中處理，不另存截圖。辨識空結果或失敗時停止，後續清空與輸入不執行。非空結果仍可能辨識錯誤，應先用實際圖片確認效果。
+
+OCR 引擎在首次需要時載入，同次執行共用。`timeout` 用於等待網頁元件，不包含模型載入及辨識耗時；停止會在當次 OCR 返回後生效，並阻止後續輸入。依賴套件見 requirements.txt；PyInstaller 設定已加入 OCR 模型資料收集，安裝包仍須另行建置及驗證。
+
+暫不加入條件、區塊迴圈、任意 Python 執行或子流程；維持一行一指令的循序腳本。

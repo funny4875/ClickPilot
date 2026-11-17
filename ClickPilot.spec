@@ -7,7 +7,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/icon.ico', 'assets')] + collect_data_files('imageio_ffmpeg', includes=['binaries/*']),
+    datas=[('assets/icon.ico', 'assets')] + collect_data_files('imageio_ffmpeg', includes=['binaries/*']) + collect_data_files('ddddocr'),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

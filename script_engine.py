@@ -157,6 +157,53 @@ def valid_url(url):
         return False
 
 
+VARIABLE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
+READ_ACTIONS = ('read_text', 'read_value', 'read_attribute', 'ocr')
+OUTPUT_ACTIONS = READ_ACTIONS + ('set',)
+
+
+def resolve_text(value, variables):
+    def replace(match):
+        name = match.group(1)
+        if name not in variables:
+            raise ValueError(f'變數 {name} 尚未定義')
+        return variables[name]
+    return VARIABLE.sub(replace, value)
+
+
+def required_inputs(steps):
+    """Legacy external inputs remain prompts; outputs must be assigned before use."""
+    outputs = {s['into'] for _, s in steps if s['action'] in OUTPUT_ACTIONS}
+    assigned, inputs = set(), set()
+    for line, step in steps:
+        for field in ('value', 'xpath', 'url', 'attribute'):
+            for name in VARIABLE.findall(step[field] if isinstance(step.get(field), str) else ''):
+                if name in outputs and name not in assigned:
+                    raise ValueError(f'第 {line} 行：變數 {name} 必須先取得或設定，再使用')
+                if name not in outputs:
+                    inputs.add(name)
+        if step['action'] in OUTPUT_ACTIONS:
+            assigned.add(step['into'])
+    return sorted(inputs)
+
+
+class ImageRecognizer:
+    def __init__(self):
+        self.engine = None
+
+    def recognize(self, png, case='keep'):
+        if self.engine is None:
+            try:
+                import ddddocr
+            except ImportError as exc:
+                raise RuntimeError('缺少圖片辨識套件，請安裝 requirements.txt 中的 ddddocr。') from exc
+            self.engine = ddddocr.DdddOcr(show_ad=False)
+        text = self.engine.classification(png).strip()
+        if not text:
+            raise ValueError('圖片未辨識出文字，已停止，未填入欄位。')
+        return text.upper() if case == 'upper' else text.lower() if case == 'lower' else text
+
+
 def parse_script(content):
     steps = []
     for number, line in enumerate(content.splitlines(), 1):
@@ -164,12 +211,20 @@ def parse_script(content):
             continue
         try:
             step = json.loads(line)
-            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'navigate', 'close_browser', 'video_start', 'video_pause', 'video_stop'):
+            if not isinstance(step, dict) or step.get('action') not in ('click', 'clear', 'send_keys', 'paste', 'key', 'wait', 'wait_for', 'navigate', 'close_browser', 'video_start', 'video_pause', 'video_stop') + OUTPUT_ACTIONS:
                 raise ValueError('需指定有效的 action')
             action = step['action']
-            if action not in ('wait', 'navigate', 'close_browser', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
+            if action not in ('set', 'wait', 'navigate', 'close_browser', 'video_start', 'video_pause', 'video_stop') and (not isinstance(step.get('xpath'), str) or not step['xpath'].strip()):
                 raise ValueError('需指定有效的 xpath')
-            if action == 'navigate' and not valid_url(step.get('url')):
+            if action in OUTPUT_ACTIONS and (not isinstance(step.get('into'), str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', step['into'])):
+                raise ValueError('into 變數名稱須以英文字母或底線開頭，僅含英數及底線')
+            if action == 'set' and not isinstance(step.get('value'), str):
+                raise ValueError('set 需指定文字 value')
+            if action == 'read_attribute' and (not isinstance(step.get('attribute'), str) or not step['attribute'].strip()):
+                raise ValueError('需指定 attribute 屬性名稱')
+            if action == 'ocr' and step.get('case', 'keep') not in ('keep', 'upper', 'lower'):
+                raise ValueError('case 必須是 keep、upper 或 lower')
+            if action == 'navigate' and (not isinstance(step.get('url'), str) or not (VARIABLE.search(step['url']) or valid_url(step['url']))):
                 raise ValueError('url 必須是完整的 http:// 或 https:// 網址')
             if action == 'video_start' and any(k in step for k in ('x','y','w','h')):
                 from video_recorder import validate_region
@@ -220,13 +275,23 @@ def run_script(driver, steps, count, variables, stop, progress, on_driver_change
 
 
 def _run_script(driver, steps, count, variables, stop, progress, recorder, on_driver_changed):
+    initial_variables = dict(variables)
+    recognizer = ImageRecognizer()
     for cycle in range(1, count + 1):
+        variables = dict(initial_variables)
         for line, step in steps:
             if stop.is_set():
                 raise Stopped()
             action = step['action']
             progress(cycle, line, step)
             try:
+                step = dict(step)
+                for field in ('value', 'xpath', 'url', 'attribute'):
+                    if isinstance(step.get(field), str):
+                        step[field] = resolve_text(step[field], variables)
+                if action == 'set':
+                    variables[step['into']] = step['value']
+                    continue
                 if driver is None and action not in ('wait', 'navigate', 'video_pause', 'video_stop') and not (action == 'video_start' and recorder.state == 'paused'):
                     raise RuntimeError('目前沒有開啟 Chrome，請先加入「開啟網址」指令。')
                 if action == 'close_browser':
@@ -250,6 +315,8 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder, on_dr
                     progress(cycle, line, {'name': f'影片已儲存：{output}'})
                     continue
                 if action == 'navigate':
+                    if not valid_url(step['url']):
+                        raise ValueError('url 必須是完整的 http:// 或 https:// 網址')
                     new_driver = create_browser()
                     try:
                         new_driver.get(step['url'])
@@ -268,14 +335,15 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder, on_dr
                 stable_element = None
                 stable_since = None
                 value = step.get('value', '')
-                for name, replacement in variables.items():
-                    value = value.replace('${' + name + '}', replacement)
                 while True:
                     if stop.is_set():
                         raise Stopped()
                     try:
                         elements = driver.find_elements(By.XPATH, step['xpath'])
-                        element = next((e for e in elements if e.is_displayed() and e.is_enabled()), None)
+                        element = next((e for e in elements if e.is_displayed() and (action in READ_ACTIONS or e.is_enabled())), None)
+                        if element is not None and action == 'ocr' and element.tag_name.lower() == 'img':
+                            if not driver.execute_script('return arguments[0].complete && arguments[0].naturalWidth > 0', element):
+                                element = None
                         if element is not None:
                             if action == 'wait_for': break
                             current = (element.id, element.rect)
@@ -291,6 +359,18 @@ def _run_script(driver, steps, count, variables, stop, progress, recorder, on_dr
                             elif action == 'send_keys': element.send_keys(value)
                             elif action == 'paste': paste_text(element, value)
                             elif action == 'key': element.send_keys(getattr(Keys, value.upper()))
+                            elif action == 'read_text': variables[step['into']] = element.text
+                            elif action == 'read_value': variables[step['into']] = str(element.get_property('value') or '')
+                            elif action == 'read_attribute':
+                                result = element.get_dom_attribute(step['attribute'])
+                                if result is None:
+                                    raise ValueError(f"元件沒有 {step['attribute']} 屬性")
+                                variables[step['into']] = result
+                            elif action == 'ocr':
+                                result = recognizer.recognize(element.screenshot_as_png, step.get('case', 'keep'))
+                                if stop.is_set():
+                                    raise Stopped()
+                                variables[step['into']] = result
                             break
                     except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException):
                         stable_element, stable_since = None, None
